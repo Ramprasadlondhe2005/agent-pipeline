@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 import traceback
@@ -25,59 +25,60 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     user_input: str
 
-def call_gemini(prompt: str, system_instruction: str = None) -> str:
-    """Helper function to call Gemini API."""
-    client = genai.Client(api_key=api_key) # Uses GEMINI_API_KEY environment variable
+class AgentOutput(BaseModel):
+    name: str = Field(description="The name of the agent (e.g., 'Router', 'Researcher', 'Drafter', 'Reviewer', 'Polisher')")
+    output: str = Field(description="The output produced by this specific agent step")
+
+class PipelineResponse(BaseModel):
+    agents: list[AgentOutput] = Field(description="The outputs from the 5 agents evaluated in sequence.")
+    final_response: str = Field(description="The beautifully formatted final output from the Polisher agent, using markdown.")
+
+def call_gemini_pipeline(user_input: str) -> PipelineResponse:
+    """Helper function to call Gemini API and get structured JSON response."""
+    client = genai.Client(api_key=api_key)
+    
+    system_instruction = """You are a highly capable AI system operating as a 5-step Agentic Pipeline.
+For the user's request, you must simulate the following 5 distinct agent steps in sequence internally, and return the structured JSON output for each step:
+1. Router Agent: Briefly classify the intent and give a 1-sentence direction.
+2. Research Agent: Break down the problem and outline necessary context based on the Router's direction.
+3. Drafting Agent: Generate the actual content, code, or summary based on the Research outline.
+4. Reviewer Agent: Critically analyze the Draft against the original request. Identify flaws and corrections.
+5. Polisher Agent: Take the corrected draft and apply final beautiful Markdown formatting for the user.
+
+You MUST provide exactly 5 agents in your `agents` array, perfectly matching the names:
+"Router", "Researcher", "Drafter", "Reviewer", "Polisher".
+And finally, provide the polished text in `final_response`.
+"""
     
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=0.7,
+        response_mime_type="application/json",
+        response_schema=PipelineResponse
     )
     
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=prompt,
+        contents=f"User Request: {user_input}",
         config=config
     )
-    return response.text
+    
+    # Parse the returned JSON text into our Pydantic model
+    return PipelineResponse.model_validate_json(response.text)
 
 @app.post("/chat")
 async def chat_pipeline(request: ChatRequest):
     user_input = request.user_input
     
     try:
-        # Agent 1: Router
-        router_instruction = "You are a Router Agent. Analyze the user's request and classify its intent briefly. Then, provide a high-level one-sentence direction for the Research Agent."
-        router_output = call_gemini(f"User Request: {user_input}", router_instruction)
-        
-        # Agent 2: Researcher
-        research_instruction = "You are a Research Agent. Based on the user's request and the Router's direction, gather necessary context, break down the problem, and provide a detailed outline of what needs to be created or addressed."
-        research_prompt = f"User Request: {user_input}\n\nRouter Output: {router_output}"
-        research_output = call_gemini(research_prompt, research_instruction)
-        
-        # Agent 3: Coder/Drafter
-        drafter_instruction = "You are a Drafting Agent. Based on the Research Agent's outline, generate the actual detailed content, whether it's code, a summary, or a creative piece. Do not include boilerplate pleasantries."
-        drafter_prompt = f"User Request: {user_input}\n\nResearch Output: {research_output}"
-        drafter_output = call_gemini(drafter_prompt, drafter_instruction)
-        
-        # Agent 4: Reviewer
-        reviewer_instruction = "You are a Reviewer Agent. Critically analyze the Drafting Agent's output against the original user request. Identify any flaws, missing parts, or areas for improvement, and provide a corrected/improved version."
-        reviewer_prompt = f"Original Request: {user_input}\n\nDraft:\n{drafter_output}"
-        reviewer_output = call_gemini(reviewer_prompt, reviewer_instruction)
-        
-        # Agent 5: Polisher
-        polisher_instruction = "You are a Polisher Agent. Take the Reviewer's corrected output and format it beautifully for the final user. Use clear markdown styling. Make the response engaging, helpful, and direct in a Chatbot style."
-        polisher_prompt = f"Original Request: {user_input}\n\nReviewed Draft:\n{reviewer_output}"
-        final_output = call_gemini(polisher_prompt, polisher_instruction)
+        # Run the entire pipeline in ONE single API call to avoid rate limits
+        pipeline_data = call_gemini_pipeline(user_input)
         
         return {
-            "response": final_output,
+            "response": pipeline_data.final_response,
             "agents": [
-                {"name": "Router", "output": router_output},
-                {"name": "Researcher", "output": research_output},
-                {"name": "Drafter", "output": drafter_output},
-                {"name": "Reviewer", "output": reviewer_output},
-                {"name": "Polisher", "output": final_output}
+                {"name": agent.name, "output": agent.output} 
+                for agent in pipeline_data.agents
             ]
         }
     except Exception as e:
