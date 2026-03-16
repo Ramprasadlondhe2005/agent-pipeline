@@ -24,6 +24,20 @@ To ensure lightning-fast responses and bypass rate limits, the backend uses **St
 *   **Backend:** Python, FastAPI, Pydantic, `google-genai` (Gemini 2.5 Flash)
 *   **Frontend:** React (Vite), plain CSS (custom design system, `Outfit` font), Lucide React
 
+## 📸 Screenshots
+
+### 1. The Chat Interface
+![Chat Interface](screenshots/chat-interface.png.png)
+*The main user interface showing the chatbot design.*
+
+### 2. The 5-Agent Pipeline Trace
+![Pipeline Trace Overview](screenshots/pipeline-trace.png.png)
+*Viewing the "thoughts" and outputs of the Router, Researcher, Drafter, and Reviewer.*
+
+### 3. Final Polished Output
+![Polisher Agent Output](screenshots/polished-output.png.png)
+*The result formatted beautifully by the Final Polisher agent.*
+
 ---
 
 ## 💻 Getting Started
